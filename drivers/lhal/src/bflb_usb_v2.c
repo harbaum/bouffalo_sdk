@@ -39,7 +39,7 @@
 
 void USBD_IRQHandler(int irq, void *arg);
 
-extern void USBH_IRQHandler(struct usbh_bus *bus);
+extern void USBH_IRQHandler(uint8_t busid);
 
 static void bflb_usb_phy_init(void)
 {
@@ -92,8 +92,7 @@ static void bflb_usb_phy_init(void)
 
 void USBH_IRQ(int x, void *y)
 {
-    extern struct usbh_bus *usbh_bus0;
-    USBH_IRQHandler(usbh_bus0);
+    USBH_IRQHandler(0);
 }
 
 void usb_hc_low_level_init(void)
