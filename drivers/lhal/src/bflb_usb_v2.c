@@ -39,7 +39,7 @@
 
 void USBD_IRQHandler(int irq, void *arg);
 
-extern void USBH_IRQHandler();
+extern void USBH_IRQHandler(struct usbh_bus *bus);
 
 static void bflb_usb_phy_init(void)
 {
@@ -90,13 +90,19 @@ static void bflb_usb_phy_init(void)
     bflb_mtimer_delay_ms(2);
 }
 
+void USBH_IRQ(int x, void *y)
+{
+    extern struct usbh_bus *usbh_bus0;
+    USBH_IRQHandler(usbh_bus0);
+}
+
 void usb_hc_low_level_init(void)
 {
     uint32_t regval;
 
     bflb_usb_phy_init();
 
-    bflb_irq_attach(37, USBH_IRQHandler, NULL);
+    bflb_irq_attach(37, USBH_IRQ, NULL);
     bflb_irq_enable(37);
 
     /* enable device-A for host */
@@ -172,7 +178,7 @@ struct bl_udc {
     struct bl_ep_state out_ep[USB_NUM_BIDIR_ENDPOINTS]; /*!< OUT endpoint parameters            */
 } g_bl_udc;
 
-USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t g_setup_buffer[8];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t usbd_g_setup_buffer[8];
 
 static void bflb_usb_reset_fifo(uint8_t fifo)
 {
@@ -494,7 +500,7 @@ static uint8_t usb_get_transfer_fifo(uint8_t ep_idx)
     return target_fifo_id;
 }
 
-int usb_dc_init(void)
+int usb_dc_init(uint8_t busid)
 {
     uint32_t regval;
 
@@ -615,7 +621,7 @@ int usb_dc_init(void)
     return 0;
 }
 
-int usb_dc_deinit(void)
+int usb_dc_deinit(uint8_t busid)
 {
     uint32_t regval;
 
@@ -647,7 +653,7 @@ int usb_dc_deinit(void)
     return 0;
 }
 
-int usbd_set_address(const uint8_t addr)
+int usbd_set_address(uint8_t busid, const uint8_t addr)
 {
     uint32_t regval;
 
@@ -659,7 +665,7 @@ int usbd_set_address(const uint8_t addr)
     return 0;
 }
 
-uint8_t usbd_get_port_speed(const uint8_t port)
+uint8_t usbd_get_port_speed(uint8_t busid, const uint8_t port)
 {
     uint8_t speed = 3;
 
@@ -675,35 +681,34 @@ uint8_t usbd_get_port_speed(const uint8_t port)
     return USB_SPEED_HIGH;
 }
 
-int usbd_ep_open(const struct usbd_endpoint_cfg *ep_cfg)
+int usbd_ep_open(uint8_t busid, const struct usb_endpoint_descriptor *ep)
 {
-    uint8_t ep;
+    // uint8_t ep;
     uint32_t regval;
 
-    ep = ep_cfg->ep_addr;
+    // ep = ep_cfg->ep_addr;
 
-    uint8_t ep_idx = USB_EP_GET_IDX(ep);
-
+    uint8_t ep_idx = USB_EP_GET_IDX(ep->bEndpointAddress);
     if ((ep_idx > 4) && (ep_idx < 9)) {
         return 0;
     }
 
-    if (USB_EP_DIR_IS_OUT(ep)) {
-        g_bl_udc.out_ep[ep_idx].ep_mps = ep_cfg->ep_mps;
-        g_bl_udc.out_ep[ep_idx].ep_type = ep_cfg->ep_type;
+    if (USB_EP_DIR_IS_OUT(ep->bEndpointAddress)) {
+        g_bl_udc.out_ep[ep_idx].ep_mps = USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize);
+        g_bl_udc.out_ep[ep_idx].ep_type = USB_GET_ENDPOINT_TYPE(ep->bmAttributes);
         g_bl_udc.out_ep[ep_idx].ep_enable = 1U;
-        bflb_usb_set_outep_mps(ep_idx, ep_cfg->ep_mps);
+        bflb_usb_set_outep_mps(ep_idx, USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize));
     } else {
-        g_bl_udc.in_ep[ep_idx].ep_mps = ep_cfg->ep_mps;
-        g_bl_udc.in_ep[ep_idx].ep_type = ep_cfg->ep_type;
+        g_bl_udc.in_ep[ep_idx].ep_mps = USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize);
+        g_bl_udc.in_ep[ep_idx].ep_type = USB_GET_ENDPOINT_TYPE(ep->bmAttributes);
         g_bl_udc.in_ep[ep_idx].ep_enable = 1U;
-        bflb_usb_set_inep_mps(ep_idx, ep_cfg->ep_mps);
+        bflb_usb_set_inep_mps(ep_idx, USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize));
         bflb_usb_set_mult(ep_idx, 0);
     }
 
     if (ep_idx != 0) {
 #if !defined(CONFIG_USB_PINGPONG_ENABLE) && !defined(CONFIG_USB_TRIPLE_ENABLE)
-        if (ep_cfg->ep_mps > 512) {
+        if (USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize) > 512) {
             bflb_usb_set_ep_fifomap(1, USB_FIFO_F0);
             bflb_usb_set_ep_fifomap(2, USB_FIFO_F2);
 
@@ -713,11 +718,11 @@ int usbd_ep_open(const struct usbd_endpoint_cfg *ep_cfg)
             bflb_usb_set_fifo_epmap(USB_FIFO_F3, 2, USB_FIFO_DIR_BID);
 
             if (ep_idx == 1) {
-                bflb_usb_fifo_config(USB_FIFO_F0, ep_cfg->ep_type, 1024, 1, true);
-                bflb_usb_fifo_config(USB_FIFO_F1, ep_cfg->ep_type, 1024, 1, false);
+                bflb_usb_fifo_config(USB_FIFO_F0, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 1024, 1, true);
+                bflb_usb_fifo_config(USB_FIFO_F1, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 1024, 1, false);
             } else if (ep_idx == 2) {
-                bflb_usb_fifo_config(USB_FIFO_F2, ep_cfg->ep_type, 1024, 1, true);
-                bflb_usb_fifo_config(USB_FIFO_F3, ep_cfg->ep_type, 1024, 1, false);
+                bflb_usb_fifo_config(USB_FIFO_F2, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 1024, 1, true);
+                bflb_usb_fifo_config(USB_FIFO_F3, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 1024, 1, false);
             } else {
                 return -1;
             }
@@ -733,19 +738,19 @@ int usbd_ep_open(const struct usbd_endpoint_cfg *ep_cfg)
             bflb_usb_set_fifo_epmap(USB_FIFO_F3, 4, USB_FIFO_DIR_BID);
 
             if (ep_idx == 1) {
-                bflb_usb_fifo_config(USB_FIFO_F0, ep_cfg->ep_type, 512, 1, true);
+                bflb_usb_fifo_config(USB_FIFO_F0, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 1, true);
             } else if (ep_idx == 2) {
-                bflb_usb_fifo_config(USB_FIFO_F1, ep_cfg->ep_type, 512, 1, true);
+                bflb_usb_fifo_config(USB_FIFO_F1, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 1, true);
             } else if (ep_idx == 3) {
-                bflb_usb_fifo_config(USB_FIFO_F2, ep_cfg->ep_type, 512, 1, true);
+                bflb_usb_fifo_config(USB_FIFO_F2, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 1, true);
             } else if (ep_idx == 4) {
-                bflb_usb_fifo_config(USB_FIFO_F3, ep_cfg->ep_type, 512, 1, true);
+                bflb_usb_fifo_config(USB_FIFO_F3, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 1, true);
             } else {
                 return -1;
             }
         }
 #elif defined(CONFIG_USB_PINGPONG_ENABLE)
-        if (ep_cfg->ep_mps > 512) {
+        if (USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize) > 512) {
             bflb_usb_set_ep_fifomap(1, USB_FIFO_F0);
 
             bflb_usb_set_fifo_epmap(USB_FIFO_F0, 1, USB_FIFO_DIR_BID);
@@ -754,10 +759,10 @@ int usbd_ep_open(const struct usbd_endpoint_cfg *ep_cfg)
             bflb_usb_set_fifo_epmap(USB_FIFO_F3, 1, USB_FIFO_DIR_BID);
 
             if (ep_idx == 1) {
-                bflb_usb_fifo_config(USB_FIFO_F0, ep_cfg->ep_type, 1024, 2, true);
-                bflb_usb_fifo_config(USB_FIFO_F1, ep_cfg->ep_type, 1024, 2, false);
-                bflb_usb_fifo_config(USB_FIFO_F2, ep_cfg->ep_type, 1024, 2, false);
-                bflb_usb_fifo_config(USB_FIFO_F3, ep_cfg->ep_type, 1024, 2, false);
+                bflb_usb_fifo_config(USB_FIFO_F0, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 1024, 2, true);
+                bflb_usb_fifo_config(USB_FIFO_F1, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 1024, 2, false);
+                bflb_usb_fifo_config(USB_FIFO_F2, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 1024, 2, false);
+                bflb_usb_fifo_config(USB_FIFO_F3, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 1024, 2, false);
             } else {
                 return -1;
             }
@@ -771,17 +776,17 @@ int usbd_ep_open(const struct usbd_endpoint_cfg *ep_cfg)
             bflb_usb_set_fifo_epmap(USB_FIFO_F3, 2, USB_FIFO_DIR_BID);
 
             if (ep_idx == 1) {
-                bflb_usb_fifo_config(USB_FIFO_F0, ep_cfg->ep_type, 512, 2, true);
-                bflb_usb_fifo_config(USB_FIFO_F1, ep_cfg->ep_type, 512, 2, false);
+                bflb_usb_fifo_config(USB_FIFO_F0, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 2, true);
+                bflb_usb_fifo_config(USB_FIFO_F1, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 2, false);
             } else if (ep_idx == 2) {
-                bflb_usb_fifo_config(USB_FIFO_F2, ep_cfg->ep_type, 512, 2, true);
-                bflb_usb_fifo_config(USB_FIFO_F3, ep_cfg->ep_type, 512, 2, false);
+                bflb_usb_fifo_config(USB_FIFO_F2, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 2, true);
+                bflb_usb_fifo_config(USB_FIFO_F3, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 2, false);
             } else {
                 return -1;
             }
         }
 #elif defined(CONFIG_USB_TRIPLE_ENABLE)
-        if (ep_cfg->ep_mps > 512) {
+        if (USB_GET_MAXPACKETSIZE(ep->wMaxPacketSize) > 512) {
             return -1;
         } else {
             bflb_usb_set_ep_fifomap(1, USB_FIFO_F0);
@@ -793,11 +798,11 @@ int usbd_ep_open(const struct usbd_endpoint_cfg *ep_cfg)
             bflb_usb_set_fifo_epmap(USB_FIFO_F3, 2, USB_FIFO_DIR_BID);
 
             if (ep_idx == 1) {
-                bflb_usb_fifo_config(USB_FIFO_F0, ep_cfg->ep_type, 512, 3, true);
-                bflb_usb_fifo_config(USB_FIFO_F1, ep_cfg->ep_type, 512, 3, false);
-                bflb_usb_fifo_config(USB_FIFO_F2, ep_cfg->ep_type, 512, 3, false);
+                bflb_usb_fifo_config(USB_FIFO_F0, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 3, true);
+                bflb_usb_fifo_config(USB_FIFO_F1, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 3, false);
+                bflb_usb_fifo_config(USB_FIFO_F2, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 3, false);
             } else if (ep_idx == 2) {
-                bflb_usb_fifo_config(USB_FIFO_F3, ep_cfg->ep_type, 512, 1, true);
+                bflb_usb_fifo_config(USB_FIFO_F3, USB_GET_ENDPOINT_TYPE(ep->bmAttributes), 512, 1, true);
             } else {
                 return -1;
             }
@@ -810,12 +815,12 @@ int usbd_ep_open(const struct usbd_endpoint_cfg *ep_cfg)
     return 0;
 }
 
-int usbd_ep_close(const uint8_t ep)
+int usbd_ep_close(uint8_t busid, const uint8_t ep)
 {
     return 0;
 }
 
-int usbd_ep_set_stall(const uint8_t ep)
+int usbd_ep_set_stall(uint8_t busid, const uint8_t ep)
 {
     uint32_t regval;
 
@@ -842,7 +847,7 @@ int usbd_ep_set_stall(const uint8_t ep)
     return 0;
 }
 
-int usbd_ep_clear_stall(const uint8_t ep)
+int usbd_ep_clear_stall(uint8_t busid, const uint8_t ep)
 {
     uint32_t regval;
 
@@ -866,12 +871,12 @@ int usbd_ep_clear_stall(const uint8_t ep)
     return 0;
 }
 
-int usbd_ep_is_stalled(const uint8_t ep, uint8_t *stalled)
+int usbd_ep_is_stalled(uint8_t busid, const uint8_t ep, uint8_t *stalled)
 {
     return 0;
 }
 
-int usbd_ep_start_write(const uint8_t ep, const uint8_t *data, uint32_t data_len)
+int usbd_ep_start_write(uint8_t busid, const uint8_t ep, const uint8_t *data, uint32_t data_len)
 {
     uint8_t ep_idx = USB_EP_GET_IDX(ep);
 
@@ -908,7 +913,7 @@ int usbd_ep_start_write(const uint8_t ep, const uint8_t *data, uint32_t data_len
     return 0;
 }
 
-int usbd_ep_start_read(const uint8_t ep, uint8_t *data, uint32_t data_len)
+int usbd_ep_start_read(uint8_t busid, const uint8_t ep, uint8_t *data, uint32_t data_len)
 {
     uint8_t ep_idx = USB_EP_GET_IDX(ep);
 
@@ -955,13 +960,13 @@ void USBD_IRQHandler(int irq, void *arg)
             subgroup_intstatus = bflb_usb_get_source_group_intstatus(0);
 
             if (subgroup_intstatus & USB_CX_SETUP_INT) {
-                bflb_usb_vdma_start_read(USB_FIFO_CXF, g_setup_buffer, 8);
+                bflb_usb_vdma_start_read(USB_FIFO_CXF, usbd_g_setup_buffer, 8);
                 while (getreg32(BFLB_USB_BASE + USB_VDMA_CXFPS1_OFFSET) & USB_VDMA_START_CXF) {
                 }
 
                 bflb_usb_source_group_int_clear(3, USB_VDMA_CMPLT_CXF);
 
-                usbd_event_ep0_setup_complete_handler(g_setup_buffer);
+                usbd_event_ep0_setup_complete_handler(0, usbd_g_setup_buffer);
             }
         }
         if (dev_intstatus & USB_INT_G1) {
@@ -978,17 +983,17 @@ void USBD_IRQHandler(int irq, void *arg)
                 bflb_usb_reset_fifo(USB_FIFO_F3);
                 bflb_usb_reset_fifo(USB_FIFO_CXF);
 
-                usbd_event_suspend_handler();
+                usbd_event_suspend_handler(0);
             }
             if (subgroup_intstatus & USB_RESM_INT) {
                 bflb_usb_source_group_int_clear(2, USB_RESM_INT);
-                usbd_event_resume_handler();
+                usbd_event_resume_handler(0);
             }
             if (subgroup_intstatus & USB_TX0BYTE_INT) {
                 for (uint8_t i = 1; i < 5; i++) {
                     if (bflb_usb_get_tx_zlp_intstatus() & (1 << (i - 1))) {
                         bflb_usb_clear_tx_zlp_intstatus(i);
-                        usbd_event_ep_in_complete_handler(i | 0x80, 0);
+                        usbd_event_ep_in_complete_handler(0, i | 0x80, 0);
                     }
                 }
                 bflb_usb_source_group_int_clear(2, USB_TX0BYTE_INT);
@@ -997,7 +1002,7 @@ void USBD_IRQHandler(int irq, void *arg)
                 for (uint8_t i = 1; i < 5; i++) {
                     if (bflb_usb_get_rx_zlp_intstatus() & (1 << (i - 1))) {
                         bflb_usb_clear_rx_zlp_intstatus(i);
-                        usbd_event_ep_out_complete_handler(i, 0);
+                        usbd_event_ep_out_complete_handler(0, i, 0);
                     }
                 }
 
@@ -1023,7 +1028,7 @@ void USBD_IRQHandler(int irq, void *arg)
 
                 memset(&g_bl_udc, 0, sizeof(g_bl_udc));
 
-                usbd_event_reset_handler();
+                usbd_event_reset_handler(0);
             }
         }
         if (dev_intstatus & USB_INT_G3) {
@@ -1036,11 +1041,11 @@ void USBD_IRQHandler(int irq, void *arg)
                     if (g_bl_udc.in_ep[0].actual_xfer_len < g_bl_udc.in_ep[0].ep_mps) {
                         bflb_usb_control_transfer_done();
                     }
-                    usbd_event_ep_in_complete_handler(0x80, g_bl_udc.in_ep[0].actual_xfer_len);
+                    usbd_event_ep_in_complete_handler(0, 0x80, g_bl_udc.in_ep[0].actual_xfer_len);
                 } else {
                     g_bl_udc.out_ep[0].ep_active = false;
                     g_bl_udc.out_ep[0].actual_xfer_len = g_bl_udc.out_ep[0].xfer_len - bflb_usb_vdma_get_remain_size(USB_FIFO_CXF);
-                    usbd_event_ep_out_complete_handler(0x00, g_bl_udc.out_ep[0].actual_xfer_len);
+                    usbd_event_ep_out_complete_handler(0, 0x00, g_bl_udc.out_ep[0].actual_xfer_len);
                 }
             }
 
@@ -1050,11 +1055,11 @@ void USBD_IRQHandler(int irq, void *arg)
                     if (g_bl_udc.in_ep[ep_idx].ep_active) {
                         g_bl_udc.in_ep[ep_idx].ep_active = 0;
                         g_bl_udc.in_ep[ep_idx].actual_xfer_len = g_bl_udc.in_ep[ep_idx].xfer_len - bflb_usb_vdma_get_remain_size(i);
-                        usbd_event_ep_in_complete_handler(ep_idx | 0x80, g_bl_udc.in_ep[ep_idx].actual_xfer_len);
+                        usbd_event_ep_in_complete_handler(0, ep_idx | 0x80, g_bl_udc.in_ep[ep_idx].actual_xfer_len);
                     } else if (g_bl_udc.out_ep[ep_idx].ep_active) {
                         g_bl_udc.out_ep[ep_idx].ep_active = 0;
                         g_bl_udc.out_ep[ep_idx].actual_xfer_len = g_bl_udc.out_ep[ep_idx].xfer_len - bflb_usb_vdma_get_remain_size(i);
-                        usbd_event_ep_out_complete_handler(ep_idx & 0x7f, g_bl_udc.out_ep[ep_idx].actual_xfer_len);
+                        usbd_event_ep_out_complete_handler(0, ep_idx & 0x7f, g_bl_udc.out_ep[ep_idx].actual_xfer_len);
                     }
                 }
             }
