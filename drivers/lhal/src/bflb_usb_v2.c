@@ -129,7 +129,7 @@ void usb_hc_low_level_init(void)
     putreg32(regval, BFLB_USB_BASE + USB_GLB_INT_OFFSET);
 }
 
-uint8_t usbh_get_port_speed(const uint8_t port)
+uint8_t usbh_get_port_speed(struct usbh_bus *bus, const uint8_t port)
 {
     uint8_t speed = 3;
 
@@ -664,7 +664,7 @@ int usbd_set_address(uint8_t busid, const uint8_t addr)
     return 0;
 }
 
-uint8_t usbd_get_port_speed(uint8_t busid, const uint8_t port)
+uint8_t usbd_get_port_speed(uint8_t busid)
 {
     uint8_t speed = 3;
 
